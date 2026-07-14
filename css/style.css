@@ -1,0 +1,96 @@
+* { margin:0; padding:0; box-sizing:border-box; }
+:root {
+  --bg:#0d1a12; --felt:#123322; --gold:#d4af37; --gold-dim:#8a7423;
+  --card:#1a2e22; --line:#2e4a38; --text:#e8e2d0; --sub:#9db3a4;
+  --red:#e05252; --blue:#5aa0e0;
+}
+body {
+  background: radial-gradient(ellipse at 50% 30%, #17402b 0%, var(--bg) 75%);
+  color:var(--text); min-height:100vh;
+  font-family:"Hiragino Kaku Gothic ProN","Yu Gothic UI","Meiryo",sans-serif;
+  display:flex; justify-content:center;
+}
+#app { width:100%; max-width:640px; padding:20px 16px 48px; }
+h1 { font-size:34px; color:var(--gold); text-align:center; letter-spacing:.15em;
+     text-shadow:0 0 24px rgba(212,175,55,.35); margin:24px 0 6px; }
+h2 { font-size:20px; color:var(--gold); margin:18px 0 10px; letter-spacing:.08em; }
+.tagline { text-align:center; color:var(--sub); font-size:13px; margin-bottom:28px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+        padding:16px; margin:12px 0; }
+.btn { display:block; width:100%; padding:14px; margin:10px 0; border:none; border-radius:10px;
+       background:linear-gradient(180deg,#e3c455,#b8952c); color:#1a1405; font-size:17px;
+       font-weight:bold; cursor:pointer; letter-spacing:.06em; }
+.btn:active { transform:translateY(1px); }
+.btn.sub { background:#2a4434; color:var(--text); border:1px solid var(--line); }
+.btn.danger { background:linear-gradient(180deg,#d96a6a,#a83232); color:#fff; }
+.btn:disabled { opacity:.4; cursor:default; }
+label { display:block; font-size:13px; color:var(--sub); margin:12px 0 4px; }
+input[type=number], input[type=text] {
+  width:100%; padding:12px; font-size:20px; border-radius:8px; text-align:center;
+  border:1px solid var(--line); background:#0e2018; color:var(--text);
+}
+.row { display:flex; gap:10px; } .row > * { flex:1; }
+.timer { font-size:30px; text-align:center; font-variant-numeric:tabular-nums;
+         color:var(--gold); margin:4px 0 10px; }
+.timer.warn { color:var(--red); animation:blink 1s infinite; }
+@keyframes blink { 50% { opacity:.35; } }
+.status { display:flex; justify-content:space-between; gap:8px; font-size:12px;
+          color:var(--sub); border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:8px;
+          flex-wrap:wrap; }
+.status b { color:var(--text); font-size:14px; }
+.big { font-size:26px; text-align:center; color:var(--gold); margin:10px 0; }
+.note { font-size:12px; color:var(--sub); line-height:1.7; }
+.center { text-align:center; }
+.skill-opt { border:1px solid var(--line); border-radius:10px; padding:12px; margin:8px 0; }
+.skill-opt .nm { font-weight:bold; color:var(--gold); }
+.skill-opt .tp { font-size:11px; color:var(--sub); margin-left:8px; }
+.skill-opt .ds { font-size:12px; color:var(--sub); margin-top:4px; line-height:1.6; }
+.badge { display:inline-block; background:var(--red); color:#fff; font-size:12px;
+         padding:2px 10px; border-radius:99px; margin-left:8px; }
+table.res { width:100%; border-collapse:collapse; font-size:14px; margin:8px 0; }
+table.res td, table.res th { padding:7px 6px; border-bottom:1px solid var(--line); text-align:center; }
+table.res th { color:var(--sub); font-weight:normal; font-size:12px; }
+.gain { color:var(--gold); font-weight:bold; }
+.p1c { color:var(--blue); } .p2c { color:var(--red); }
+.handover { text-align:center; padding:60px 0; }
+.handover .who { font-size:28px; color:var(--gold); margin:16px 0; }
+.box-visual { font-size:64px; text-align:center; margin:12px 0; }
+.reveal-box { animation:pop .5s ease; }
+@keyframes pop { 0%{transform:scale(.3);opacity:0;} 70%{transform:scale(1.15);} 100%{transform:scale(1);} }
+.checkline { display:flex; align-items:center; gap:10px; margin:10px 0; font-size:15px; }
+.checkline input { width:22px; height:22px; }
+hr.sep { border:none; border-top:1px dashed var(--line); margin:14px 0; }
+
+/* ===== 回収演出 ===== */
+.cinema { position:fixed; inset:0; background:#000; z-index:100; overflow:hidden;
+          display:flex; flex-direction:column; justify-content:center; align-items:center; }
+.cinema.shake { animation:shake .4s linear infinite; }
+@keyframes shake { 0%{transform:translate(0,0);} 25%{transform:translate(3px,-2px);}
+                   50%{transform:translate(-3px,2px);} 75%{transform:translate(2px,3px);} 100%{transform:translate(0,0);} }
+.cine-line { color:#ddd; font-size:22px; letter-spacing:.15em; opacity:0;
+             transition:opacity 1.2s; margin:10px 0; text-align:center; padding:0 20px; }
+.cine-line.on { opacity:1; }
+.cine-line.red { color:#ff3b3b; text-shadow:0 0 18px rgba(255,0,0,.6); font-size:26px; }
+.alley { position:absolute; bottom:0; left:0; right:0; height:45%;
+         background:linear-gradient(180deg,transparent,#140b0b 60%); }
+.headlight { position:absolute; bottom:12%; left:-40%; width:80%; height:20%;
+             background:radial-gradient(ellipse at left, rgba(255,240,180,.5), transparent 70%);
+             opacity:0; }
+.headlight.on { opacity:1; transition:opacity 2s; }
+.goons { position:absolute; bottom:8%; right:-260px; font-size:60px; letter-spacing:-6px;
+         filter:brightness(.35) contrast(1.3); transition:right 3.5s ease-in-out; white-space:nowrap; }
+.goons.walk { right:8%; }
+.victim { position:absolute; bottom:9%; left:12%; font-size:56px; transition:transform .3s; }
+.victim.grabbed { animation:struggle .25s linear infinite; }
+@keyframes struggle { 0%{transform:rotate(-6deg);} 50%{transform:rotate(6deg);} 100%{transform:rotate(-6deg);} }
+.victim.taken { transition:all 2.5s ease-in; transform:translateX(120vw); }
+.car { position:absolute; bottom:6%; left:-200px; font-size:70px; }
+.car.arrive { left:60%; transition:left 2s ease-out; }
+.car.leave { left:130vw; transition:left 1.8s ease-in; }
+.vignette { position:absolute; inset:0; pointer-events:none;
+            box-shadow:inset 0 0 140px 60px rgba(120,0,0,.55); opacity:0; transition:opacity 2s; }
+.vignette.on { opacity:1; }
+.skip { position:absolute; top:14px; right:14px; background:none; border:1px solid #444;
+        color:#888; padding:6px 14px; border-radius:8px; cursor:pointer; font-size:12px; z-index:101; }
+.fin { font-size:44px; color:#8a0f0f; letter-spacing:.4em; opacity:0; transition:opacity 2s; }
+.fin.on { opacity:1; }

@@ -1,0 +1,645 @@
+"use strict";
+/* ================= 定数 ================= */
+const STASH_SEC = 180;   // 仕込み(宣言含む) 3分
+const GUESS_SEC = 300;   // 予想 5分
+const TOTAL_GAMES = 4;
+
+// スキルは事前選択なし。1試合に1回、使いたいタイミングで下記から選んで使用する。
+const SKILLS = {
+  baiPush:    { name:"倍プッシュ",  timing:"仕込み時",   desc:"宣言と同時に全員へ公開。この回に自分が獲得する勝ち点が2倍(正直者ボーナスと重複可)。" },
+  torimodoshi:{ name:"取り戻し",   timing:"オープン後", desc:"自分の箱の金額を手元に戻す(この回の自分の攻撃獲得は無効)。ブラフ専用。" },
+  sasatsu:    { name:"査察官",     timing:"予想時",     desc:"「相手の箱はN万円以上か?」と1回質問できる。答えは必ず真実。" },
+  sashiosae:  { name:"差し押さえ", timing:"予想時",     desc:"予想確定と同時に発動。防御成功(予想>中身)なら差額を勝ち点として獲得。" },
+  hoken:      { name:"保険",       timing:"オープン後", desc:"この回に相手が獲得する勝ち点を半減。" },
+  yuushi:     { name:"追加融資",   timing:"仕込み時",   desc:"攻撃用現金+20万円 または 予想枠+20万円 のどちらかを選ぶ。" },
+};
+
+/* ================= 状態 ================= */
+const S = {
+  names: ["プレイヤー1", "プレイヤー2"],
+  p: [], game: 1, round: null,
+};
+function newPlayer(){ return { cash:100, budget:100, pts:0, skillUsed:false, usedSkill:null }; }
+function newRound(boxes){
+  return {
+    boxes,
+    x:[[],[]], d:[[],[]], y:[[],[]],
+    baiPush:[false,false], sashiosae:[false,false],
+    torimodoshi:[false,false], hoken:[false,false],
+    notes:[],
+    applied:false,
+  };
+}
+function useSkill(i, id){
+  S.p[i].skillUsed = true;
+  S.p[i].usedSkill = id;
+}
+
+/* ================= ユーティリティ ================= */
+const app = document.getElementById("app");
+function show(html){ clearTimer(); app.innerHTML = html; window.scrollTo(0,0); }
+function esc(s){ return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function pcls(i){ return i===0 ? "p1c" : "p2c"; }
+function fmtPts(sen){ // 千円単位の勝ち点 → 表示
+  const man = sen/10;
+  return (Number.isInteger(man) ? man : man.toFixed(1)) + "万円";
+}
+function fmtMan(n){ return n + "万円"; }
+function clampInt(v,min,max){ v = Math.floor(Number(v)||0); return Math.max(min, Math.min(max, v)); }
+
+let timerHandle = null, timerRemain = 0;
+function clearTimer(){ if(timerHandle){ clearInterval(timerHandle); timerHandle=null; } }
+function startTimer(sec, elId, onExpire){
+  let remain = sec;
+  timerRemain = remain;
+  const el = ()=>document.getElementById(elId);
+  const draw = ()=>{
+    const e = el(); if(!e) return;
+    const m = Math.floor(remain/60), s = remain%60;
+    e.textContent = `⏱ ${m}:${String(s).padStart(2,"0")}`;
+    e.classList.toggle("warn", remain<=30);
+  };
+  draw();
+  timerHandle = setInterval(()=>{
+    remain--;
+    timerRemain = remain;
+    if(remain<=0){ clearTimer(); onExpire(); return; }
+    draw();
+  }, 1000);
+}
+
+function statusBar(i){
+  const p = S.p[i];
+  return `<div class="status">
+    <span><b class="${pcls(i)}">${esc(S.names[i])}</b></span>
+    <span>残金 <b>${fmtMan(p.cash)}</b></span>
+    <span>予想枠 <b>${fmtMan(p.budget)}</b></span>
+    <span>勝ち点 <b>${fmtPts(p.pts)}</b></span>
+    <span>スキル <b>${p.skillUsed ? "使用済" : "未使用"}</b></span>
+  </div>`;
+}
+
+function skillListHtml(){
+  return Object.values(SKILLS).map(s=>`
+    <div class="skill-opt">
+      <span class="nm">${s.name}</span><span class="tp">[${s.timing}]</span>
+      <div class="ds">${s.desc}</div>
+    </div>`).join("");
+}
+
+/* ================= 勝ち点計算 ================= */
+function calcAtk(i){ // iの攻撃獲得(千円)。宣言一致は×1.2(=係数12)
+  const r = S.round, j = 1-i;
+  if(r.torimodoshi[i]) return 0;
+  let s = 0;
+  r.x[i].forEach((x,k)=>{
+    const y = r.y[j][k] ?? 0;
+    if(x > y) s += (x - y) * (r.d[i][k] === x ? 12 : 10);
+  });
+  return s;
+}
+function calcDef(i){ // iの防御側獲得(ぴったり賞+差し押さえ)(千円)
+  const r = S.round, j = 1-i;
+  let s = 0;
+  r.x[j].forEach((x,k)=>{
+    const y = r.y[i][k] ?? 0;
+    if(x === y) s += x * 10;               // ぴったり賞(ボーナスなし)
+    if(y > x && r.sashiosae[i]) s += (y - x) * 10; // 差し押さえ
+  });
+  return s;
+}
+function roundGain(i){
+  const r = S.round;
+  let g = calcAtk(i) + calcDef(i);
+  if(r.baiPush[i]) g *= 2;
+  if(r.hoken[1-i]) g = Math.floor(g/2);
+  return g;
+}
+
+/* ================= 画面: タイトル ================= */
+function titleScreen(){
+  show(`
+    <h1>マネーゲーム</h1>
+    <p class="tagline">― 貸与された100万円。返せなければ、どうなるか分かるな? ―</p>
+    <div class="card note">
+      ・2人対戦。各自に <b>現金100万円</b>(攻撃用)と <b>予想枠100万円</b>(防御用)が貸与される。<br>
+      ・毎ゲーム同時に、箱へ金を仕込み(3分)、中身を宣言し(嘘OK)、相手の箱を予想する(5分)。<br>
+      ・中身 &gt; 予想 → 攻撃側が差額を獲得。ぴったり → 防御側が中身と同額を獲得。<br>
+      ・宣言が真実なら獲得20%アップ。<br>
+      ・全4ゲーム。最終ゲームは <b>ダブルボックス</b>。<br>
+      ・<b style="color:var(--red)">敗者には……お迎えが来る。</b>
+    </div>
+    <div class="card">
+      <h2 style="margin-top:0">スキル(1試合に1回)</h2>
+      <p class="note">事前選択はなし。使いたいタイミングが来たら、その場で下記から1つ選んで使用できる。</p>
+      ${skillListHtml()}
+    </div>
+    <div class="card">
+      <label>プレイヤー1の名前</label>
+      <input type="text" id="n1" maxlength="10" placeholder="プレイヤー1">
+      <label>プレイヤー2の名前</label>
+      <input type="text" id="n2" maxlength="10" placeholder="プレイヤー2">
+    </div>
+    <button class="btn" id="go">ゲーム開始</button>
+  `);
+  document.getElementById("go").onclick = ()=>{
+    S.names[0] = document.getElementById("n1").value.trim() || "プレイヤー1";
+    S.names[1] = document.getElementById("n2").value.trim() || "プレイヤー2";
+    S.p = [newPlayer(), newPlayer()];
+    S.game = 1;
+    gameIntro();
+  };
+}
+
+function handover(i, what, next){
+  show(`
+    <div class="handover">
+      <div class="note">端末を渡してください</div>
+      <div class="who ${pcls(i)}">${esc(S.names[i])}</div>
+      <div class="note">${esc(what)}<br>他のプレイヤーは画面を見ないでください。</div>
+      <button class="btn" id="ok" style="margin-top:36px">${esc(S.names[i])} です ― 画面を開く</button>
+    </div>
+  `);
+  document.getElementById("ok").onclick = next;
+}
+
+/* ================= 画面: ゲーム進行 ================= */
+function gameIntro(){
+  const g = S.game;
+  const special = g===TOTAL_GAMES;
+  show(`
+    <h1 style="font-size:26px">第${g}ゲーム${special?' <span class="badge">FINAL</span>':""}</h1>
+    ${special ? `
+      <div class="card">
+        <h2>💼 ダブルボックス</h2>
+        <p class="note">
+          最終ゲームは箱が<b>2つ</b>。残金を自由に2つの箱へ振り分けろ(片方0でも可、全額でなくても可)。<br>
+          宣言も箱ごとに行い、相手は<b>両方の箱それぞれ</b>を予想する(どちらも予想枠を消費)。<br>
+          判定は箱ごとに独立。宣言が一致した箱の獲得は20%アップ。
+        </p>
+      </div>` : `
+      <div class="card note">
+        仕込み(3分) → 宣言の同時公開 → 予想(5分) → 一斉オープン。<br>
+        時間切れは「0」として確定するので注意。
+      </div>`}
+    <table class="res">
+      <tr><th></th><th class="p1c">${esc(S.names[0])}</th><th class="p2c">${esc(S.names[1])}</th></tr>
+      <tr><td>勝ち点</td><td>${fmtPts(S.p[0].pts)}</td><td>${fmtPts(S.p[1].pts)}</td></tr>
+      <tr><td>残金</td><td>${fmtMan(S.p[0].cash)}</td><td>${fmtMan(S.p[1].cash)}</td></tr>
+      <tr><td>予想枠</td><td>${fmtMan(S.p[0].budget)}</td><td>${fmtMan(S.p[1].budget)}</td></tr>
+      <tr><td>スキル</td><td>${S.p[0].skillUsed?"使用済":"未使用"}</td><td>${S.p[1].skillUsed?"使用済":"未使用"}</td></tr>
+    </table>
+    <button class="btn" id="ok">仕込みフェイズへ</button>
+  `);
+  document.getElementById("ok").onclick = ()=>{
+    S.round = newRound(special ? 2 : 1);
+    handover(0, "仕込み(秘密・3分)", ()=>stashScreen(0));
+  };
+}
+
+/* ---- 仕込み ---- */
+function stashScreen(i, remainSec){
+  const p = S.p[i], r = S.round;
+  const boxes = r.boxes;
+  const canSkill = !p.skillUsed;
+  const boxInputs = boxes===2 ? `
+    <label>箱A に入れる金額(万円)</label>
+    <input type="number" id="x0" min="0" max="${p.cash}" value="0">
+    <label>箱B に入れる金額(万円)</label>
+    <input type="number" id="x1" min="0" max="${p.cash}" value="0">
+    <div class="note center" id="sumNote">合計 0 / 残金 ${p.cash}万円</div>
+    <hr class="sep">
+    <label>宣言: 箱A の中身(嘘OK)</label>
+    <input type="number" id="d0" min="0" max="999" value="0">
+    <label>宣言: 箱B の中身(嘘OK)</label>
+    <input type="number" id="d1" min="0" max="999" value="0">
+  ` : `
+    <label>箱に入れる金額(万円) ― 0〜${p.cash}</label>
+    <input type="number" id="x0" min="0" max="${p.cash}" value="0">
+    <hr class="sep">
+    <label>宣言: 「箱には○万円入っている」(嘘OK)</label>
+    <input type="number" id="d0" min="0" max="999" value="0">
+  `;
+  show(`
+    ${statusBar(i)}
+    <div class="timer" id="tm"></div>
+    <h2>💰 仕込み ${boxes===2?"(ダブルボックス)":""}</h2>
+    <div class="card">${boxInputs}</div>
+    ${canSkill ? `
+      <div class="card">
+        <div style="color:var(--gold);font-weight:bold">スキル(このタイミングで使えるもの)</div>
+        <hr class="sep">
+        <div class="nm" style="font-weight:bold">追加融資</div>
+        <div class="row">
+          <button class="btn sub" id="loanCash">現金 +20万円</button>
+          <button class="btn sub" id="loanBudget">予想枠 +20万円</button>
+        </div>
+        <hr class="sep">
+        <div class="checkline">
+          <input type="checkbox" id="bai">
+          <label for="bai" style="margin:0;font-size:15px;color:var(--text)">
+            倍プッシュを発動する<br><span class="note">※宣言の公開時に全員へ知らされます。獲得2倍</span>
+          </label>
+        </div>
+        <p class="note">スキルは1試合に1回だけ。どちらか一方しか使えません。</p>
+      </div>` : ""}
+    <button class="btn" id="ok">箱を閉じる(確定)</button>
+  `);
+  if(boxes===2){
+    const upd = ()=>{
+      const a = clampInt(document.getElementById("x0").value,0,p.cash);
+      const b = clampInt(document.getElementById("x1").value,0,p.cash);
+      const el = document.getElementById("sumNote");
+      el.textContent = `合計 ${a+b} / 残金 ${p.cash}万円`;
+      el.style.color = (a+b>p.cash) ? "var(--red)" : "var(--sub)";
+    };
+    document.getElementById("x0").oninput = upd;
+    document.getElementById("x1").oninput = upd;
+  }
+  if(canSkill){
+    const useLoan = (kind)=>{
+      const rem = timerRemain; // 残り時間を引き継ぐ
+      useSkill(i, "yuushi");
+      if(kind==="cash"){ p.cash += 20; r.notes.push(`${esc(S.names[i])}【追加融資】現金+20万円`); }
+      else { p.budget += 20; r.notes.push(`${esc(S.names[i])}【追加融資】予想枠+20万円`); }
+      stashScreen(i, rem); // 再描画(残金反映)
+    };
+    document.getElementById("loanCash").onclick   = ()=>useLoan("cash");
+    document.getElementById("loanBudget").onclick = ()=>useLoan("budget");
+  }
+  const commit = (timeout)=>{
+    const remBefore = timerRemain;
+    clearTimer();
+    let xs = [], ds = [];
+    if(timeout){
+      xs = Array(boxes).fill(0); ds = Array(boxes).fill(0);
+    } else {
+      for(let k=0;k<boxes;k++){
+        xs.push(clampInt(document.getElementById("x"+k).value, 0, p.cash));
+        ds.push(clampInt(document.getElementById("d"+k).value, 0, 999));
+      }
+      const total = xs.reduce((a,b)=>a+b,0);
+      if(total > p.cash){ alert(`合計が残金(${p.cash}万円)を超えています。`); startTimerAgain(remBefore); return; }
+      const bai = document.getElementById("bai");
+      if(bai && bai.checked && !p.skillUsed){
+        r.baiPush[i] = true; useSkill(i, "baiPush");
+      }
+    }
+    r.x[i] = xs; r.d[i] = ds;
+    p.cash -= xs.reduce((a,b)=>a+b,0);
+    if(i===0) handover(1, "仕込み(秘密・3分)", ()=>stashScreen(1));
+    else declReveal();
+  };
+  const startTimerAgain = (sec)=>startTimer(sec ?? STASH_SEC, "tm", ()=>{
+    alert("時間切れ! 0万円(宣言0)として確定します。");
+    commit(true);
+  });
+  document.getElementById("ok").onclick = ()=>commit(false);
+  startTimerAgain(remainSec);
+}
+
+/* ---- 宣言の同時公開 ---- */
+function declReveal(){
+  const r = S.round;
+  const line = (i)=>{
+    const decl = r.d[i].map((d,k)=> r.boxes===2 ? `箱${"AB"[k]}: <b>${d}万円</b>` : `<b>${d}万円</b>`).join(" / ");
+    return `<div class="card center">
+      <span class="${pcls(i)}" style="font-size:17px;font-weight:bold">${esc(S.names[i])}</span>
+      <div class="big">「中身は ${decl} だ」</div>
+      ${r.baiPush[i] ? `<span class="badge">倍プッシュ発動!!</span>` : ""}
+    </div>`;
+  };
+  show(`
+    <h2 class="center">📢 宣言 ― 同時公開</h2>
+    <p class="note center">(嘘かもしれない)</p>
+    ${line(0)}${line(1)}
+    <button class="btn" id="ok">予想フェイズへ</button>
+  `);
+  document.getElementById("ok").onclick = ()=>handover(0, "予想(秘密・5分)", ()=>guessScreen(0));
+}
+
+/* ---- 予想 ---- */
+function guessScreen(i){
+  const p = S.p[i], r = S.round, j = 1-i;
+  const boxes = r.boxes;
+  const canSkill = !p.skillUsed;
+  const oppDecl = r.d[j].map((d,k)=> boxes===2 ? `箱${"AB"[k]}: ${d}万円` : `${d}万円`).join(" / ");
+  const guessInputs = boxes===2 ? `
+    <label>相手の箱A の予想</label>
+    <input type="number" id="y0" min="0" max="${p.budget}" value="0">
+    <label>相手の箱B の予想</label>
+    <input type="number" id="y1" min="0" max="${p.budget}" value="0">
+    <div class="note center" id="sumNote">予想合計 0 / 残り枠 ${p.budget}万円</div>
+  ` : `
+    <label>相手の箱の中身を予想(0〜${p.budget})</label>
+    <input type="number" id="y0" min="0" max="${p.budget}" value="0">
+  `;
+  show(`
+    ${statusBar(i)}
+    <div class="timer" id="tm"></div>
+    <h2>🔍 予想</h2>
+    <div class="card center note">
+      相手 <b class="${pcls(j)}">${esc(S.names[j])}</b> の宣言: <b style="color:var(--text)">「${oppDecl}」</b>
+      ${r.baiPush[j] ? '<br><span class="badge">相手は倍プッシュ発動中!</span>' : ""}
+      <br>相手の残金(仕込み前): ${fmtMan(S.p[j].cash + r.x[j].reduce((a,b)=>a+b,0))}
+    </div>
+    ${canSkill ? `
+      <div class="card">
+        <div style="color:var(--gold);font-weight:bold">スキル(このタイミングで使えるもの)</div>
+        <hr class="sep">
+        <div class="nm" style="font-weight:bold">査察官 ― 「相手の箱はN万円以上か?」(回答は必ず真実)</div>
+        ${boxes===2 ? `<label>対象の箱</label>
+          <div class="row"><button class="btn sub" id="qa">箱A に質問</button><button class="btn sub" id="qb">箱B に質問</button></div>` : ""}
+        <label>N =</label>
+        <input type="number" id="qn" min="1" max="200" value="50">
+        ${boxes===2 ? "" : `<button class="btn sub" id="qa">質問する</button>`}
+        <div class="big" id="ans"></div>
+        <hr class="sep">
+        <div class="checkline">
+          <input type="checkbox" id="szc">
+          <label for="szc" style="margin:0;font-size:15px;color:var(--text)">
+            差し押さえを発動する<br><span class="note">※防御成功(予想&gt;中身)なら差額を獲得。オープン時に公開されます</span>
+          </label>
+        </div>
+        <p class="note">スキルは1試合に1回だけ。どちらか一方しか使えません。</p>
+      </div>` : ""}
+    <div class="card">${guessInputs}</div>
+    <button class="btn" id="ok">予想を確定</button>
+  `);
+  if(boxes===2){
+    const upd = ()=>{
+      const a = clampInt(document.getElementById("y0").value,0,999);
+      const b = clampInt(document.getElementById("y1").value,0,999);
+      const el = document.getElementById("sumNote");
+      el.textContent = `予想合計 ${a+b} / 残り枠 ${p.budget}万円`;
+      el.style.color = (a+b>p.budget) ? "var(--red)" : "var(--sub)";
+    };
+    document.getElementById("y0").oninput = upd;
+    document.getElementById("y1").oninput = upd;
+  }
+  if(canSkill){
+    const ask = (boxIdx)=>{
+      if(p.skillUsed) return;
+      const n = clampInt(document.getElementById("qn").value,1,200);
+      const truth = (r.x[j][boxIdx] ?? 0) >= n;
+      useSkill(i, "sasatsu");
+      r.notes.push(`${esc(S.names[i])}【査察官】を使用(質問内容は非公開)`);
+      document.getElementById("ans").textContent =
+        (boxes===2 ? `箱${"AB"[boxIdx]}: ` : "") + (truth ? `YES ― ${n}万円以上ある` : `NO ― ${n}万円未満だ`);
+      // スキルは1回きり: 他の選択肢を無効化
+      ["qa","qb"].forEach(id=>{ const b=document.getElementById(id); if(b) b.disabled = true; });
+      const szc = document.getElementById("szc");
+      if(szc){ szc.checked = false; szc.disabled = true; }
+    };
+    const qa = document.getElementById("qa"); if(qa) qa.onclick = ()=>ask(0);
+    const qb = document.getElementById("qb"); if(qb) qb.onclick = ()=>ask(1);
+  }
+  const commit = (timeout)=>{
+    const remBefore = timerRemain;
+    clearTimer();
+    let ys = [];
+    if(timeout){
+      ys = Array(boxes).fill(0);
+    } else {
+      for(let k=0;k<boxes;k++) ys.push(clampInt(document.getElementById("y"+k).value, 0, 999));
+      const total = ys.reduce((a,b)=>a+b,0);
+      if(total > p.budget){ alert(`予想の合計が残り枠(${p.budget}万円)を超えています。`); restart(remBefore); return; }
+      const szc = document.getElementById("szc");
+      if(szc && szc.checked && !p.skillUsed){
+        r.sashiosae[i] = true; useSkill(i, "sashiosae");
+      }
+    }
+    r.y[i] = ys;
+    p.budget -= ys.reduce((a,b)=>a+b,0);
+    if(i===0) handover(1, "予想(秘密・5分)", ()=>guessScreen(1));
+    else openScreen();
+  };
+  const restart = (sec)=>startTimer(sec ?? GUESS_SEC, "tm", ()=>{
+    alert("時間切れ! 予想0として確定します(枠の消費なし)。");
+    commit(true);
+  });
+  document.getElementById("ok").onclick = ()=>commit(false);
+  restart();
+}
+
+/* ---- オープン ---- */
+function openScreen(){
+  show(`
+    <h2 class="center">運命のオープン</h2>
+    <div class="box-visual">📦　📦</div>
+    <p class="note center">両者の箱を同時に開ける――</p>
+    <button class="btn danger" id="ok">オープン!!</button>
+  `);
+  document.getElementById("ok").onclick = ()=>postSkillFlow(0);
+}
+
+// オープン後スキル判断(スキル未使用のプレイヤーだけ順番に確認。使用宣言は公開情報)
+function postSkillFlow(i){
+  if(i > 1){ resultScreen(); return; }
+  if(S.p[i].skillUsed){ postSkillFlow(i+1); return; }
+  postSkillScreen(i, ()=>postSkillFlow(i+1));
+}
+
+function revealTable(){
+  const r = S.round;
+  const rows = [];
+  for(const i of [0,1]){
+    const j = 1-i;
+    r.x[i].forEach((x,k)=>{
+      const y = r.y[j][k] ?? 0;
+      const boxName = r.boxes===2 ? `箱${"AB"[k]}` : "箱";
+      const honest = r.d[i][k]===x;
+      let judge;
+      if(x>y) judge = `<span class="gain">攻撃側 +${fmtPts((x-y)*(honest?12:10))}</span>${honest?'<br><span class="note">宣言一致+20%</span>':""}`;
+      else if(x===y) judge = `<span class="gain">ぴったり賞! 防御側 +${fmtPts(x*10)}</span>`;
+      else judge = `防御成功${r.sashiosae[j]?`<br><span class="gain">差し押さえ +${fmtPts((y-x)*10)}</span>`:""}`;
+      rows.push(`<tr>
+        <td class="${pcls(i)}">${esc(S.names[i])} の${boxName}</td>
+        <td><b>${x}</b>${honest?" ✅":""}</td>
+        <td>${r.d[i][k]}</td>
+        <td>${y}</td>
+        <td>${judge}</td>
+      </tr>`);
+    });
+  }
+  return `<table class="res">
+    <tr><th></th><th>中身</th><th>宣言</th><th>相手の予想</th><th>判定</th></tr>
+    ${rows.join("")}
+  </table>`;
+}
+
+/* ---- オープン後スキル(公開判断) ---- */
+function postSkillScreen(i, next){
+  const p = S.p[i], r = S.round, j = 1-i;
+  const myGain = roundGain(i), oppGain = roundGain(j);
+  const refund = r.x[i].reduce((a,b)=>a+b,0);
+  const canTorimodoshi = refund > 0;
+  const canHoken = oppGain > 0;
+  show(`
+    ${statusBar(i)}
+    <h2>オープン後のスキル判断 ― <span class="${pcls(i)}">${esc(S.names[i])}</span></h2>
+    ${revealTable()}
+    <div class="card center note">
+      この回の獲得見込み ― ${esc(S.names[i])}: <b class="gain">${fmtPts(myGain)}</b> / 相手: <b>${fmtPts(oppGain)}</b>
+    </div>
+    <div class="card">
+      <div style="color:var(--gold);font-weight:bold">スキル(このタイミングで使えるもの)</div>
+      ${canTorimodoshi ? `
+        <p class="note">【取り戻し】箱の ${fmtMan(refund)} を手元に戻す。この回のあなたの攻撃獲得は無効。</p>
+        <button class="btn danger" id="useTori">取り戻しを使う</button>` : `<p class="note">【取り戻し】箱が空のため使用不可。</p>`}
+      <hr class="sep">
+      ${canHoken ? `
+        <p class="note">【保険】相手のこの回の獲得 ${fmtPts(oppGain)} → <b>${fmtPts(Math.floor(oppGain/2))}</b> に半減。</p>
+        <button class="btn danger" id="useHoken">保険を使う</button>` : `<p class="note">【保険】相手の獲得が0のため使用不可。</p>`}
+    </div>
+    <button class="btn" id="ok">使わずに進む</button>
+  `);
+  const ut = document.getElementById("useTori");
+  if(ut) ut.onclick = ()=>{ r.torimodoshi[i] = true; useSkill(i, "torimodoshi"); next(); };
+  const uh = document.getElementById("useHoken");
+  if(uh) uh.onclick = ()=>{ r.hoken[i] = true; useSkill(i, "hoken"); next(); };
+  document.getElementById("ok").onclick = next;
+}
+
+/* ---- ラウンド結果 ---- */
+function resultScreen(){
+  const r = S.round;
+  if(!r.applied){
+    r.applied = true;
+    for(const i of [0,1]){
+      S.p[i].pts += roundGain(i);
+      if(r.torimodoshi[i]) S.p[i].cash += r.x[i].reduce((a,b)=>a+b,0);
+    }
+  }
+  const skillNotes = [...r.notes];
+  for(const i of [0,1]){
+    if(r.baiPush[i])     skillNotes.push(`${esc(S.names[i])}【倍プッシュ】獲得2倍!`);
+    if(r.sashiosae[i])   skillNotes.push(`${esc(S.names[i])}【差し押さえ】発動!`);
+    if(r.torimodoshi[i]) skillNotes.push(`${esc(S.names[i])}【取り戻し】箱の金を回収(獲得無効)!`);
+    if(r.hoken[i])       skillNotes.push(`${esc(S.names[i])}【保険】相手の獲得を半減!`);
+  }
+  show(`
+    <h2 class="center reveal-box">第${S.game}ゲーム 結果</h2>
+    ${revealTable()}
+    ${skillNotes.length ? `<div class="card center" style="color:var(--gold)">${skillNotes.join("<br>")}</div>` : ""}
+    <div class="card">
+      <table class="res">
+        <tr><th></th><th class="p1c">${esc(S.names[0])}</th><th class="p2c">${esc(S.names[1])}</th></tr>
+        <tr><td>この回の獲得</td><td class="gain">+${fmtPts(roundGain(0))}</td><td class="gain">+${fmtPts(roundGain(1))}</td></tr>
+        <tr><td><b>勝ち点合計</b></td><td><b>${fmtPts(S.p[0].pts)}</b></td><td><b>${fmtPts(S.p[1].pts)}</b></td></tr>
+        <tr><td>残金</td><td>${fmtMan(S.p[0].cash)}</td><td>${fmtMan(S.p[1].cash)}</td></tr>
+        <tr><td>予想枠</td><td>${fmtMan(S.p[0].budget)}</td><td>${fmtMan(S.p[1].budget)}</td></tr>
+      </table>
+    </div>
+    <button class="btn" id="ok">${S.game < TOTAL_GAMES ? "次のゲームへ" : "最終結果へ"}</button>
+  `);
+  document.getElementById("ok").onclick = ()=>{
+    if(S.game < TOTAL_GAMES){ S.game++; gameIntro(); }
+    else finalScreen();
+  };
+}
+
+/* ================= 最終結果と回収演出 ================= */
+function finalScreen(){
+  let winner, loser, tieNote = "";
+  if(S.p[0].pts !== S.p[1].pts){
+    winner = S.p[0].pts > S.p[1].pts ? 0 : 1;
+  } else if(S.p[0].cash !== S.p[1].cash){
+    winner = S.p[0].cash > S.p[1].cash ? 0 : 1;
+    tieNote = "(勝ち点同点のため残金勝負)";
+  } else {
+    drawScreen(); return;
+  }
+  loser = 1 - winner;
+  show(`
+    <h1 style="font-size:26px">全4ゲーム終了</h1>
+    <div class="card">
+      <table class="res">
+        <tr><th></th><th class="p1c">${esc(S.names[0])}</th><th class="p2c">${esc(S.names[1])}</th></tr>
+        <tr><td><b>最終勝ち点</b></td><td><b>${fmtPts(S.p[0].pts)}</b></td><td><b>${fmtPts(S.p[1].pts)}</b></td></tr>
+        <tr><td>残金</td><td>${fmtMan(S.p[0].cash)}</td><td>${fmtMan(S.p[1].cash)}</td></tr>
+      </table>
+      <div class="big">勝者: <span class="${pcls(winner)}">${esc(S.names[winner])}</span></div>
+      <p class="note center">${tieNote}</p>
+    </div>
+    <p class="note center">……ところで、負けた方の精算がまだのようだ。</p>
+    <button class="btn danger" id="ok">精算の時間</button>
+  `);
+  document.getElementById("ok").onclick = ()=>cutscene(winner, loser);
+}
+
+function drawScreen(){
+  show(`
+    <h1 style="font-size:26px">引き分け</h1>
+    <div class="card center">
+      <div class="big">両者 完全同点</div>
+      <p class="note">黒服たちは顔を見合わせ、静かに去っていった。<br>――今回は、二人とも生還だ。</p>
+    </div>
+    <button class="btn" id="ok">もう一度遊ぶ</button>
+  `);
+  document.getElementById("ok").onclick = ()=>location.reload();
+}
+
+function cutscene(winner, loser){
+  const name = esc(S.names[loser]);
+  document.body.insertAdjacentHTML("beforeend", `
+    <div class="cinema" id="cinema">
+      <button class="skip" id="skip">スキップ ≫</button>
+      <div class="vignette" id="vig"></div>
+      <div id="lines" style="z-index:5">
+        <div class="cine-line" id="l1">―― 全4ゲーム、終了。</div>
+        <div class="cine-line" id="l2">${name}…… 精算の、お時間です。</div>
+        <div class="cine-line red" id="l3">「借りたものは、返してもらう」</div>
+      </div>
+      <div class="alley"></div>
+      <div class="headlight" id="hl"></div>
+      <div class="car" id="car">🚘</div>
+      <div class="goons" id="goons">🕴️🕴️🕴️</div>
+      <div class="victim" id="victim">😨</div>
+      <div class="fin" id="fin">回 収 完 了</div>
+    </div>
+  `);
+  const $ = id=>document.getElementById(id);
+  const timeouts = [];
+  const at = (ms, fn)=>timeouts.push(setTimeout(fn, ms));
+  const end = ()=>{
+    timeouts.forEach(clearTimeout);
+    const c = $("cinema"); if(c) c.remove();
+    epilogue(winner, loser);
+  };
+  $("skip").onclick = end;
+  at(500,  ()=>$("l1").classList.add("on"));
+  at(2200, ()=>{ $("hl").classList.add("on"); $("car").classList.add("arrive"); });
+  at(4000, ()=>{ $("goons").classList.add("walk"); $("l2").classList.add("on"); });
+  at(7200, ()=>{ $("l3").classList.add("on"); $("vig").classList.add("on"); $("cinema").classList.add("shake"); $("victim").classList.add("grabbed"); });
+  at(9200, ()=>{ $("cinema").classList.remove("shake"); $("victim").classList.remove("grabbed"); $("victim").classList.add("taken"); $("goons").classList.remove("walk"); });
+  at(10800,()=>{ $("car").classList.remove("arrive"); $("car").classList.add("leave"); });
+  at(12500,()=>{ $("lines").style.opacity = 0; $("fin").classList.add("on"); });
+  at(15000, end);
+}
+
+function epilogue(winner, loser){
+  const skillCell = (i)=> S.p[i].usedSkill ? SKILLS[S.p[i].usedSkill].name : "未使用";
+  show(`
+    <h1 style="font-size:26px">結果発表</h1>
+    <div class="card center">
+      <div class="big">🏆 <span class="${pcls(winner)}">${esc(S.names[winner])}</span> の勝利</div>
+      <p class="note">${esc(S.names[winner])} は100万円を返済し、生還した。</p>
+      <hr class="sep">
+      <p style="color:var(--red)">${esc(S.names[loser])} は黒塗りの車で連れて行かれました……。<br>
+      <span class="note">行き先を知る者はいない。</span></p>
+    </div>
+    <div class="card">
+      <table class="res">
+        <tr><th></th><th class="p1c">${esc(S.names[0])}</th><th class="p2c">${esc(S.names[1])}</th></tr>
+        <tr><td><b>最終勝ち点</b></td><td><b>${fmtPts(S.p[0].pts)}</b></td><td><b>${fmtPts(S.p[1].pts)}</b></td></tr>
+        <tr><td>残金</td><td>${fmtMan(S.p[0].cash)}</td><td>${fmtMan(S.p[1].cash)}</td></tr>
+        <tr><td>使用スキル</td><td>${skillCell(0)}</td><td>${skillCell(1)}</td></tr>
+      </table>
+    </div>
+    <button class="btn" id="ok">もう一度遊ぶ</button>
+  `);
+  document.getElementById("ok").onclick = ()=>location.reload();
+}
+
+titleScreen();
