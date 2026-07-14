@@ -4,8 +4,8 @@ const STASH_SEC = 180;   // 仕込み(宣言含む) 3分
 const GUESS_SEC = 300;   // 予想 5分
 const POST_SEC  = 60;    // オープン後のスキル判断 1分
 const AUTO_SEC  = 15;    // 確認画面の自動進行までの秒数
-const TOTAL_GAMES = 4;
-const STASH_CAP = 50;    // 1ゲームに箱へ入れられる上限(万円)。第4ゲームは2箱合計
+const TOTAL_GAMES = 3;
+const STASH_CAP = 50;    // 1ゲームに箱へ入れられる上限(万円)。最終ゲームは2箱合計
 
 // スキルは事前選択なし。1試合に1回、使いたいタイミングで下記から選んで使用する。
 const SKILLS = {
@@ -309,8 +309,9 @@ function titleScreen(){
       ・箱に入れられるのは <b>1ゲーム合計50万円まで</b>。<br>
       ・中身 &gt; 予想 → 攻撃側が差額を獲得。ぴったり → 防御側が中身と同額を獲得。<br>
       ・宣言が真実なら獲得20%アップ。<br>
-      ・全4ゲーム。最終ゲームは <b>ダブルボックス</b>。<br>
-      ・<b style="color:var(--red)">敗者には……お迎えが来る。</b>
+      ・全${TOTAL_GAMES}ゲーム。最終ゲームは <b>ダブルボックス</b>。<br>
+      ・<b style="color:var(--red)">敗者には……お迎えが来る。</b><br>
+      ・詳しいルールは画面右下の「📖 ルール」からいつでも確認できます。
     </div>
     <div class="card">
       <h2 style="margin-top:0">🏠 1台で対戦(ホットシート)</h2>
@@ -821,7 +822,7 @@ function finalScreen(){
   }
   loser = 1 - winner;
   show(`
-    <h1 style="font-size:26px">全4ゲーム終了</h1>
+    <h1 style="font-size:26px">全${TOTAL_GAMES}ゲーム終了</h1>
     <div class="card">
       <table class="res">
         <tr><th></th><th class="p1c">${esc(S.names[0])}</th><th class="p2c">${esc(S.names[1])}</th></tr>
@@ -858,7 +859,7 @@ function cutscene(winner, loser){
       <button class="skip" id="skip">スキップ ≫</button>
       <div class="vignette" id="vig"></div>
       <div id="lines" style="z-index:5">
-        <div class="cine-line" id="l1">―― 全4ゲーム、終了。</div>
+        <div class="cine-line" id="l1">―― 全${TOTAL_GAMES}ゲーム、終了。</div>
         <div class="cine-line" id="l2">${name}…… 精算の、お時間です。</div>
         <div class="cine-line red" id="l3">「借りたものは、返してもらう」</div>
       </div>
@@ -914,4 +915,97 @@ function epilogue(winner, loser){
   document.getElementById("ok").onclick = ()=>location.reload();
 }
 
+/* ================= ルールブック(全画面から閲覧可能) ================= */
+function rulesHtml(){
+  const skillRows = Object.values(SKILLS).map(s=>
+    `<tr><td><b>${s.name}</b></td><td>${s.timing}</td><td>${s.desc}</td></tr>`).join("");
+  return `
+    <h2>📖 マネーゲーム ルールブック</h2>
+
+    <h3>1. ゲームの目的</h3>
+    <p>2人のプレイヤーが、貸与された100万円を武器に全${TOTAL_GAMES}ゲームの心理戦を行う。
+    ゲーム終了時に<b>勝ち点の合計が多い方が勝者</b>。敗者には黒服のお迎えが来る。</p>
+
+    <h3>2. 持っているもの(リソース)</h3>
+    <table>
+      <tr><th>リソース</th><th>内容</th><th>減るタイミング</th></tr>
+      <tr><td><b>攻撃用現金</b></td><td>100万円(1万円札100枚)</td><td>箱に入れた時点で消費。戻らない</td></tr>
+      <tr><td><b>防御用予想枠</b></td><td>合計100万円</td><td>予想を宣言した時点で消費。当たっても外れても戻らない</td></tr>
+    </table>
+    <p>金額はすべて1万円単位。<b>0万円も可能</b>(空箱ブラフで相手の予想枠を空費させられる)。
+    残金・残り予想枠・上限を超える金額は入力できない。</p>
+
+    <h3>3. 1ゲームの流れ(両者同時に行う)</h3>
+    <ol>
+      <li><b>仕込み(3分・秘密)</b>: 自分の箱に金を入れる。<b>1ゲームに入れられるのは合計${STASH_CAP}万円まで</b>。あわせて「中身は○万円だ」という宣言も決める(<b>嘘をついてよい</b>)。</li>
+      <li><b>宣言の同時公開</b>: 両者の宣言が同時に公開される。</li>
+      <li><b>予想(5分・秘密)</b>: 相手の箱の中身を予想する。予想した金額は予想枠から消費される。</li>
+      <li><b>一斉オープン</b>: 両者の箱を同時に開けて判定。</li>
+      <li><b>スキル判断(1分)</b>: オープン後スキルを使うかどうか決める(スキル未使用の人のみ)。</li>
+    </ol>
+
+    <h3>4. 判定(箱ごとに独立)</h3>
+    <table>
+      <tr><th>結果</th><th>効果</th></tr>
+      <tr><td>中身 &gt; 予想</td><td>攻撃側が<b>差額</b>を勝ち点として獲得</td></tr>
+      <tr><td>中身 = 予想</td><td><b>ぴったり賞</b>: 防御側が中身と同額を勝ち点として獲得</td></tr>
+      <tr><td>中身 &lt; 予想</td><td>防御成功。勝ち点の移動なし</td></tr>
+    </table>
+
+    <h3>5. 正直者ボーナス</h3>
+    <p>宣言と中身が一致していた場合、その回に攻撃側が獲得する勝ち点が<b>20%アップ</b>。
+    「正直に言えば儲かるが、正直に言えばぴったり賞で逆に取られる」のがこのゲームの肝。
+    ※ぴったり賞にはボーナスは付かない。</p>
+
+    <h3>6. 最終ゲーム: ダブルボックス</h3>
+    <p>第${TOTAL_GAMES}ゲームは箱が<b>2つ</b>になる。残金を箱Aと箱Bに自由に振り分け(片方0でも可、<b>2箱合計で${STASH_CAP}万円まで</b>)、宣言も箱ごとに行う。
+    相手は<b>両方の箱それぞれ</b>を予想する(どちらも予想枠を消費)。判定・ボーナスは箱ごとに独立。</p>
+
+    <h3>7. スキル(1試合に1回だけ)</h3>
+    <p>事前選択はなし。使いたいタイミングが来たら、その場で1つ選んで使う。
+    使ったことは相手に公開される(査察官の質問内容だけは非公開)。</p>
+    <table>
+      <tr><th>スキル</th><th>タイミング</th><th>効果</th></tr>
+      ${skillRows}
+    </table>
+
+    <h3>8. 制限時間</h3>
+    <table>
+      <tr><th>場面</th><th>時間</th><th>時間切れの扱い</th></tr>
+      <tr><td>仕込み(宣言含む)</td><td>3分</td><td>0万円(宣言0)で確定</td></tr>
+      <tr><td>予想</td><td>5分</td><td>予想0で確定(枠の消費なし)</td></tr>
+      <tr><td>オープン後のスキル判断</td><td>1分</td><td>「使わない」で確定</td></tr>
+      <tr><td>その他の確認画面</td><td>15秒</td><td>自動で次の画面へ</td></tr>
+    </table>
+    <p>※このルールブックを開いている間も制限時間は止まらない。</p>
+
+    <h3>9. 勝敗</h3>
+    <p>全${TOTAL_GAMES}ゲーム終了時点の勝ち点合計で勝敗を決める。
+    同点の場合は残金(攻撃用現金の残り)が多い方の勝ち。それも同じなら引き分け(両者生還)。</p>
+  `;
+}
+
+function setupRulesUI(){
+  const fab = document.createElement("button");
+  fab.className = "rules-fab";
+  fab.textContent = "📖 ルール";
+  const modal = document.createElement("div");
+  modal.className = "rules-modal";
+  modal.style.display = "none";
+  modal.innerHTML = `
+    <div class="rules-inner">
+      <button class="rules-close" id="rulesClose">✕ 閉じる</button>
+      ${rulesHtml()}
+      <button class="btn sub" id="rulesClose2" style="margin-top:16px">閉じる</button>
+    </div>`;
+  document.body.appendChild(fab);
+  document.body.appendChild(modal);
+  fab.onclick = ()=>{ modal.style.display = "flex"; };
+  const close = ()=>{ modal.style.display = "none"; };
+  modal.querySelector("#rulesClose").onclick = close;
+  modal.querySelector("#rulesClose2").onclick = close;
+  modal.onclick = (e)=>{ if(e.target === modal) close(); };
+}
+
+setupRulesUI();
 titleScreen();
