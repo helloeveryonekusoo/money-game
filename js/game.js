@@ -1,7 +1,7 @@
 "use strict";
 /* ================= 定数 ================= */
 const STASH_SEC = 180;   // 仕込み(宣言含む) 3分
-const GUESS_SEC = 300;   // 予想 5分
+const GUESS_SEC = 180;   // 予想 3分
 const POST_SEC  = 60;    // オープン後のスキル判断 1分
 const AUTO_SEC  = 15;    // 確認画面の自動進行までの秒数
 const TOTAL_GAMES = 3;
@@ -305,7 +305,7 @@ function titleScreen(){
     <p class="tagline">― 貸与された100万円。返せなければ、どうなるか分かるな? ―</p>
     <div class="card note">
       ・2人対戦。各自に <b>現金100万円</b>(攻撃用)と <b>予想枠100万円</b>(防御用)が貸与される。<br>
-      ・毎ゲーム同時に、箱へ金を仕込み(3分)、中身を宣言し(嘘OK)、相手の箱を予想する(5分)。<br>
+      ・毎ゲーム同時に、箱へ金を仕込み(3分)、中身を宣言し(嘘OK)、相手の箱を予想する(3分)。<br>
       ・箱に入れられるのは <b>1ゲーム合計50万円まで</b>。<br>
       ・中身 &gt; 予想 → 攻撃側が差額を獲得。ぴったり → 防御側が中身と同額を獲得。<br>
       ・宣言が真実なら獲得20%アップ。<br>
@@ -383,7 +383,7 @@ function gameIntro(){
         </p>
       </div>` : `
       <div class="card note">
-        仕込み(3分) → 宣言の同時公開 → 予想(5分) → 一斉オープン。<br>
+        仕込み(3分) → 宣言の同時公開 → 予想(3分) → 一斉オープン。<br>
         箱に入れられるのは1ゲーム合計${STASH_CAP}万円まで。時間切れは「0」として確定するので注意。
       </div>`}
     <table class="res">
@@ -546,7 +546,7 @@ function declReveal(){
   `);
   document.getElementById("ok").onclick = ()=>{
     if(isOnline()) guessScreen(myIdx());
-    else handover(0, "予想(秘密・5分)", ()=>guessScreen(0));
+    else handover(0, "予想(秘密・3分)", ()=>guessScreen(0));
   };
   autoNext("ok");
 }
@@ -665,7 +665,7 @@ function guessScreen(i){
         return true;
       }, "相手の予想を待っています…");
     }
-    else if(i===0) handover(1, "予想(秘密・5分)", ()=>guessScreen(1));
+    else if(i===0) handover(1, "予想(秘密・3分)", ()=>guessScreen(1));
     else openScreen();
   };
   const restart = (sec)=>startTimer(sec ?? GUESS_SEC, "tm", ()=>{
@@ -939,7 +939,7 @@ function rulesHtml(){
     <ol>
       <li><b>仕込み(3分・秘密)</b>: 自分の箱に金を入れる。<b>1ゲームに入れられるのは合計${STASH_CAP}万円まで</b>。あわせて「中身は○万円だ」という宣言も決める(<b>嘘をついてよい</b>)。</li>
       <li><b>宣言の同時公開</b>: 両者の宣言が同時に公開される。</li>
-      <li><b>予想(5分・秘密)</b>: 相手の箱の中身を予想する。予想した金額は予想枠から消費される。</li>
+      <li><b>予想(3分・秘密)</b>: 相手の箱の中身を予想する。予想した金額は予想枠から消費される。</li>
       <li><b>一斉オープン</b>: 両者の箱を同時に開けて判定。</li>
       <li><b>スキル判断(1分)</b>: オープン後スキルを使うかどうか決める(スキル未使用の人のみ)。</li>
     </ol>
@@ -973,7 +973,7 @@ function rulesHtml(){
     <table>
       <tr><th>場面</th><th>時間</th><th>時間切れの扱い</th></tr>
       <tr><td>仕込み(宣言含む)</td><td>3分</td><td>0万円(宣言0)で確定</td></tr>
-      <tr><td>予想</td><td>5分</td><td>予想0で確定(枠の消費なし)</td></tr>
+      <tr><td>予想</td><td>3分</td><td>予想0で確定(枠の消費なし)</td></tr>
       <tr><td>オープン後のスキル判断</td><td>1分</td><td>「使わない」で確定</td></tr>
       <tr><td>その他の確認画面</td><td>15秒</td><td>自動で次の画面へ</td></tr>
     </table>
