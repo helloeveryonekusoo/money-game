@@ -2,6 +2,8 @@
 /* ================= 定数 ================= */
 const STASH_SEC = 180;   // 仕込み(宣言含む) 3分
 const GUESS_SEC = 300;   // 予想 5分
+const POST_SEC  = 60;    // オープン後のスキル判断 1分
+const AUTO_SEC  = 15;    // 確認画面の自動進行までの秒数
 const TOTAL_GAMES = 4;
 const STASH_CAP = 50;    // 1ゲームに箱へ入れられる上限(万円)。第4ゲームは2箱合計
 
@@ -212,6 +214,22 @@ function startTimer(sec, elId, onExpire){
   }, 1000);
 }
 
+// 制限時間のない確認画面: 一定秒数後にボタンを自動クリックして次へ進む
+function autoNext(btnId, sec){
+  clearTimer();
+  let remain = sec ?? AUTO_SEC;
+  const btn = ()=>document.getElementById(btnId);
+  const b0 = btn(); if(!b0) return;
+  const base = b0.textContent;
+  const draw = ()=>{ const b = btn(); if(b) b.textContent = `${base} (${remain})`; };
+  draw();
+  timerHandle = setInterval(()=>{
+    remain--;
+    if(remain<=0){ clearTimer(); const b = btn(); if(b) b.click(); return; }
+    draw();
+  }, 1000);
+}
+
 function statusBar(i){
   const p = S.p[i];
   return `<div class="status">
@@ -345,6 +363,7 @@ function handover(i, what, next){
     </div>
   `);
   document.getElementById("ok").onclick = next;
+  autoNext("ok");
 }
 
 /* ================= 画面: ゲーム進行 ================= */
@@ -380,6 +399,7 @@ function gameIntro(){
     if(isOnline()) stashScreen(myIdx());
     else handover(0, "仕込み(秘密・3分)", ()=>stashScreen(0));
   };
+  autoNext("ok");
 }
 
 /* ---- 仕込み ---- */
@@ -527,6 +547,7 @@ function declReveal(){
     if(isOnline()) guessScreen(myIdx());
     else handover(0, "予想(秘密・5分)", ()=>guessScreen(0));
   };
+  autoNext("ok");
 }
 
 /* ---- 予想 ---- */
@@ -663,6 +684,7 @@ function openScreen(){
     <button class="btn danger" id="ok">オープン!!</button>
   `);
   document.getElementById("ok").onclick = ()=>postSkillFlow(0);
+  autoNext("ok");
 }
 
 // オープン後スキル判断(スキル未使用のプレイヤーだけ順番に確認。使用宣言は公開情報)
@@ -726,6 +748,7 @@ function postSkillScreen(i, next){
   const canHoken = oppGain > 0;
   show(`
     ${statusBar(i)}
+    <div class="timer" id="tm"></div>
     <h2>オープン後のスキル判断 ― <span class="${pcls(i)}">${esc(S.names[i])}</span></h2>
     ${revealTable()}
     <div class="card center note">
@@ -736,12 +759,15 @@ function postSkillScreen(i, next){
       ${canHoken ? `
         <p class="note">【保険】相手のこの回の獲得 ${fmtPts(oppGain)} → <b>${fmtPts(Math.floor(oppGain/2))}</b> に半減。</p>
         <button class="btn danger" id="useHoken">保険を使う</button>` : `<p class="note">【保険】相手の獲得が0のため使用不可。</p>`}
+      <p class="note">制限時間1分。時間切れは「使わない」として確定します。</p>
     </div>
     <button class="btn" id="ok">使わずに進む</button>
   `);
+  const decide = (action)=>{ clearTimer(); next(action); };
   const uh = document.getElementById("useHoken");
-  if(uh) uh.onclick = ()=>next("hoken");
-  document.getElementById("ok").onclick = ()=>next("none");
+  if(uh) uh.onclick = ()=>decide("hoken");
+  document.getElementById("ok").onclick = ()=>decide("none");
+  startTimer(POST_SEC, "tm", ()=>decide("none"));
 }
 
 /* ---- ラウンド結果 ---- */
@@ -778,6 +804,7 @@ function resultScreen(){
     if(S.game < TOTAL_GAMES){ S.game++; gameIntro(); }
     else finalScreen();
   };
+  autoNext("ok");
 }
 
 /* ================= 最終結果と回収演出 ================= */
@@ -808,6 +835,7 @@ function finalScreen(){
     <button class="btn danger" id="ok">精算の時間</button>
   `);
   document.getElementById("ok").onclick = ()=>cutscene(winner, loser);
+  autoNext("ok");
 }
 
 function drawScreen(){
