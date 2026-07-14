@@ -5,12 +5,12 @@ const GUESS_SEC = 180;   // 予想 3分
 const POST_SEC  = 60;    // オープン後のスキル判断 1分
 const AUTO_SEC  = 15;    // 確認画面の自動進行までの秒数
 const TOTAL_GAMES = 3;
-const STASH_CAP = 50;    // 1ゲームに箱へ入れられる上限(千円単位=5万円)。最終ゲームは2箱合計
+const STASH_CAP = 5;     // 1ゲームに箱へ入れられる上限(万円単位=5万円)。最終ゲームは2箱合計
 
 // スキルは事前選択なし。1試合に1回、使いたいタイミングで下記から選んで使用する。
 const SKILLS = {
   baiPush:    { name:"倍プッシュ",  timing:"仕込み時",   desc:"宣言と同時に全員へ公開。この回に自分が獲得する勝ち点が2倍(正直者ボーナスと重複可)。" },
-  sasatsu:    { name:"査察官",     timing:"予想時",     desc:"「相手の箱はN千円以上か?」と1回質問できる。答えは必ず真実。" },
+  sasatsu:    { name:"査察官",     timing:"予想時",     desc:"「相手の箱はN万円以上か?」と1回質問できる。答えは必ず真実。" },
   sashiosae:  { name:"差し押さえ", timing:"予想時",     desc:"予想確定と同時に発動。防御成功(予想>中身)なら差額を勝ち点として獲得。" },
   hoken:      { name:"保険",       timing:"オープン後", desc:"この回に相手が獲得する勝ち点を半減。" },
   yuushi:     { name:"追加融資",   timing:"仕込み時",   desc:"攻撃用現金+2万円 または 予想枠+2万円 のどちらかを選ぶ。" },
@@ -21,7 +21,7 @@ const S = {
   names: ["プレイヤー1", "プレイヤー2"],
   p: [], game: 1, round: null,
 };
-function newPlayer(){ return { cash:100, budget:100, pts:0, skillUsed:false, usedSkill:null }; }
+function newPlayer(){ return { cash:10, budget:10, pts:0, skillUsed:false, usedSkill:null }; }
 function newRound(boxes){
   return {
     boxes,
@@ -186,7 +186,7 @@ const app = document.getElementById("app");
 function show(html){ clearTimer(); app.innerHTML = html; window.scrollTo(0,0); }
 function esc(s){ return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function pcls(i){ return i===0 ? "p1c" : "p2c"; }
-// 金額表示: 内部の金額単位は1000円(千円札1枚)、勝ち点単位は100円
+// 金額表示: 内部の金額単位は1万円(1万円札1枚)、勝ち点単位は1000円
 function fmtYen(en){
   if(en >= 10000){
     const man = Math.floor(en/10000), rest = en % 10000;
@@ -194,8 +194,8 @@ function fmtYen(en){
   }
   return en + "円";
 }
-function fmtPts(p){ return fmtYen(p*100); }   // 勝ち点(100円単位) → 表示
-function fmtMan(n){ return fmtYen(n*1000); }  // 金額(千円単位) → 表示
+function fmtPts(p){ return fmtYen(p*1000); }  // 勝ち点(1000円単位) → 表示
+function fmtMan(n){ return fmtYen(n*10000); } // 金額(万円単位) → 表示
 function clampInt(v,min,max){ v = Math.floor(Number(v)||0); return Math.max(min, Math.min(max, v)); }
 
 let timerHandle = null, timerRemain = 0;
@@ -255,7 +255,7 @@ function skillListHtml(){
 }
 
 /* ================= 勝ち点計算 ================= */
-function calcAtk(i){ // iの攻撃獲得(千円)。宣言一致は×1.2(=係数12)
+function calcAtk(i){ // iの攻撃獲得(勝ち点単位=1000円)。宣言一致は×1.2(=係数12)
   const r = S.round, j = 1-i;
   let s = 0;
   r.x[i].forEach((x,k)=>{
@@ -264,7 +264,7 @@ function calcAtk(i){ // iの攻撃獲得(千円)。宣言一致は×1.2(=係数1
   });
   return s;
 }
-function calcDef(i){ // iの防御側獲得(ぴったり賞+差し押さえ)(千円)
+function calcDef(i){ // iの防御側獲得(ぴったり賞+差し押さえ)(勝ち点単位=1000円)
   const r = S.round, j = 1-i;
   let s = 0;
   r.x[j].forEach((x,k)=>{
@@ -285,8 +285,8 @@ function roundGain(i){
 /* ================= 相手のコミットを自分の状態へ反映 ================= */
 function applyOppStash(msg){
   const j = oppIdx(), r = S.round, p = S.p[j];
-  if(msg.loan === "cash"){ p.cash += 20; useSkill(j,"yuushi"); r.notes.push(`${esc(S.names[j])}【追加融資】現金+2万円`); }
-  else if(msg.loan === "budget"){ p.budget += 20; useSkill(j,"yuushi"); r.notes.push(`${esc(S.names[j])}【追加融資】予想枠+2万円`); }
+  if(msg.loan === "cash"){ p.cash += 2; useSkill(j,"yuushi"); r.notes.push(`${esc(S.names[j])}【追加融資】現金+2万円`); }
+  else if(msg.loan === "budget"){ p.budget += 2; useSkill(j,"yuushi"); r.notes.push(`${esc(S.names[j])}【追加融資】予想枠+2万円`); }
   if(msg.baiPush){ r.baiPush[j] = true; useSkill(j,"baiPush"); }
   r.x[j] = msg.x.map(v=>clampInt(v,0,STASH_CAP));
   r.d[j] = msg.d.map(v=>clampInt(v,0,STASH_CAP));
@@ -309,7 +309,7 @@ function titleScreen(){
     <h1>マネーゲーム</h1>
     <p class="tagline">― 貸与された10万円。返せなければ、どうなるか分かるな? ―</p>
     <div class="card note">
-      ・2人対戦。各自に <b>現金10万円</b>(攻撃用)と <b>予想枠10万円</b>(防御用)が貸与される。金額はすべて1000円単位。<br>
+      ・2人対戦。各自に <b>現金10万円</b>(攻撃用)と <b>予想枠10万円</b>(防御用)が貸与される。金額はすべて1万円単位。<br>
       ・毎ゲーム同時に、箱へ金を仕込み(3分)、中身を宣言し(嘘OK)、相手の箱を予想する(3分)。<br>
       ・箱に入れられるのは <b>1ゲーム合計5万円まで</b>。<br>
       ・中身 &gt; 予想 → 攻撃側が差額を獲得。ぴったり → 防御側が中身と同額を獲得。<br>
@@ -415,21 +415,21 @@ function stashScreen(i, remainSec){
   const cap = Math.min(STASH_CAP, p.cash); // このゲームで箱に入れられる合計上限
   const canSkill = !p.skillUsed;
   const boxInputs = boxes===2 ? `
-    <label>箱A に入れる金額(千円単位。「30」= 3万円)</label>
+    <label>箱A に入れる金額(万円単位)</label>
     <input type="number" id="x0" min="0" max="${cap}" value="0">
-    <label>箱B に入れる金額(千円単位)</label>
+    <label>箱B に入れる金額(万円単位)</label>
     <input type="number" id="x1" min="0" max="${cap}" value="0">
     <div class="note center" id="sumNote">合計 0円 / 上限 ${fmtMan(cap)}(残金 ${fmtMan(p.cash)})</div>
     <hr class="sep">
-    <label>宣言: 箱A の中身(千円単位・嘘OK)</label>
+    <label>宣言: 箱A の中身(万円単位・嘘OK)</label>
     <input type="number" id="d0" min="0" max="${STASH_CAP}" value="0">
-    <label>宣言: 箱B の中身(千円単位・嘘OK)</label>
+    <label>宣言: 箱B の中身(万円単位・嘘OK)</label>
     <input type="number" id="d1" min="0" max="${STASH_CAP}" value="0">
   ` : `
-    <label>箱に入れる金額(千円単位。「30」= 3万円) ― 0〜${cap}(1ゲーム上限${fmtMan(STASH_CAP)})</label>
+    <label>箱に入れる金額(万円単位) ― 0〜${cap}(1ゲーム上限${fmtMan(STASH_CAP)})</label>
     <input type="number" id="x0" min="0" max="${cap}" value="0">
     <hr class="sep">
-    <label>宣言: 箱の中身はいくらだと言い張るか(千円単位・嘘OK)</label>
+    <label>宣言: 箱の中身はいくらだと言い張るか(万円単位・嘘OK)</label>
     <input type="number" id="d0" min="0" max="${STASH_CAP}" value="0">
   `;
   show(`
@@ -483,8 +483,8 @@ function stashScreen(i, remainSec){
       const rem = timerRemain; // 残り時間を引き継ぐ
       useSkill(i, "yuushi");
       r.loan[i] = kind;
-      if(kind==="cash"){ p.cash += 20; r.notes.push(`${esc(S.names[i])}【追加融資】現金+2万円`); }
-      else { p.budget += 20; r.notes.push(`${esc(S.names[i])}【追加融資】予想枠+2万円`); }
+      if(kind==="cash"){ p.cash += 2; r.notes.push(`${esc(S.names[i])}【追加融資】現金+2万円`); }
+      else { p.budget += 2; r.notes.push(`${esc(S.names[i])}【追加融資】予想枠+2万円`); }
       stashScreen(i, rem); // 再描画(残金反映)
     };
     document.getElementById("loanCash").onclick   = ()=>useLoan("cash");
@@ -563,13 +563,13 @@ function guessScreen(i){
   const canSkill = !p.skillUsed;
   const oppDecl = r.d[j].map((d,k)=> boxes===2 ? `箱${"AB"[k]}: ${fmtMan(d)}` : `${fmtMan(d)}`).join(" / ");
   const guessInputs = boxes===2 ? `
-    <label>相手の箱A の予想(千円単位)</label>
+    <label>相手の箱A の予想(万円単位)</label>
     <input type="number" id="y0" min="0" max="${p.budget}" value="0">
-    <label>相手の箱B の予想(千円単位)</label>
+    <label>相手の箱B の予想(万円単位)</label>
     <input type="number" id="y1" min="0" max="${p.budget}" value="0">
     <div class="note center" id="sumNote">予想合計 0円 / 残り枠 ${fmtMan(p.budget)}</div>
   ` : `
-    <label>相手の箱の中身を予想(千円単位・0〜${p.budget})</label>
+    <label>相手の箱の中身を予想(万円単位・0〜${p.budget})</label>
     <input type="number" id="y0" min="0" max="${p.budget}" value="0">
   `;
   show(`
@@ -585,11 +585,11 @@ function guessScreen(i){
       <div class="card">
         <div style="color:var(--gold);font-weight:bold">スキル(このタイミングで使えるもの)</div>
         <hr class="sep">
-        <div class="nm" style="font-weight:bold">査察官 ― 「相手の箱はN千円以上か?」(回答は必ず真実)</div>
+        <div class="nm" style="font-weight:bold">査察官 ― 「相手の箱はN万円以上か?」(回答は必ず真実)</div>
         ${boxes===2 ? `<label>対象の箱</label>
           <div class="row"><button class="btn sub" id="qa">箱A に質問</button><button class="btn sub" id="qb">箱B に質問</button></div>` : ""}
-        <label>N(千円単位) =</label>
-        <input type="number" id="qn" min="1" max="${STASH_CAP}" value="25">
+        <label>N(万円単位) =</label>
+        <input type="number" id="qn" min="1" max="${STASH_CAP}" value="3">
         ${boxes===2 ? "" : `<button class="btn sub" id="qa">質問する</button>`}
         <div class="big" id="ans"></div>
         <hr class="sep">
@@ -934,10 +934,10 @@ function rulesHtml(){
     <h3>2. 持っているもの(リソース)</h3>
     <table>
       <tr><th>リソース</th><th>内容</th><th>減るタイミング</th></tr>
-      <tr><td><b>攻撃用現金</b></td><td>10万円(千円札100枚)</td><td>箱に入れた時点で消費。戻らない</td></tr>
+      <tr><td><b>攻撃用現金</b></td><td>10万円(1万円札10枚)</td><td>箱に入れた時点で消費。戻らない</td></tr>
       <tr><td><b>防御用予想枠</b></td><td>合計10万円</td><td>予想を宣言した時点で消費。当たっても外れても戻らない</td></tr>
     </table>
-    <p>金額はすべて1000円単位(画面の入力は千円単位: 「30」= 3万円)。<b>0円も可能</b>(空箱ブラフで相手の予想枠を空費させられる)。
+    <p>金額はすべて1万円単位。<b>0円も可能</b>(空箱ブラフで相手の予想枠を空費させられる)。
     残金・残り予想枠・上限を超える金額は入力できない。</p>
 
     <h3>3. 1ゲームの流れ(両者同時に行う)</h3>
