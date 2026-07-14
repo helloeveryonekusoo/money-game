@@ -26,6 +26,7 @@ function newRound(boxes){
     x:[[],[]], d:[[],[]], y:[[],[]],
     baiPush:[false,false], sashiosae:[false,false],
     torimodoshi:[false,false], hoken:[false,false],
+    sasatsu:[false,false], loan:[null,null],
     notes:[],
     applied:false,
   };
@@ -33,6 +34,149 @@ function newRound(boxes){
 function useSkill(i, id){
   S.p[i].skillUsed = true;
   S.p[i].usedSkill = id;
+}
+
+/* ================= 通信(オンライン対戦) ================= */
+const NET = {
+  mode: "local",   // local | host | guest
+  peer: null, conn: null,
+  myIdx: 0,
+  started: false,  // host: マッチ開始済みか
+  inbox: {},       // game番号 -> {stash, guess, post}
+  waiter: null,    // 待機中の再チェック関数
+  gameOver: false,
+};
+function isOnline(){ return NET.mode !== "local"; }
+function myIdx(){ return isOnline() ? NET.myIdx : -1; }
+function oppIdx(){ return 1 - NET.myIdx; }
+function netSend(obj){ if(NET.conn && NET.conn.open) NET.conn.send(obj); }
+function inboxFor(g){ if(!NET.inbox[g]) NET.inbox[g] = {}; return NET.inbox[g]; }
+
+function handleNetData(msg){
+  if(!msg || typeof msg !== "object") return;
+  if(msg.type === "join"){ // host側: ゲストの参加通知
+    if(NET.mode !== "host" || NET.started) return;
+    NET.started = true;
+    S.names[1] = String(msg.name).slice(0,10) || "プレイヤー2";
+    netSend({ type:"start", name: S.names[0] });
+    startMatch();
+    return;
+  }
+  if(msg.type === "start"){ // guest側: ホストの開始通知
+    S.names[0] = String(msg.name).slice(0,10) || "プレイヤー1";
+    startMatch();
+    return;
+  }
+  if(msg.type === "stash" || msg.type === "guess" || msg.type === "post"){
+    inboxFor(msg.game)[msg.type] = msg;
+  }
+  if(NET.waiter) NET.waiter();
+}
+
+function netError(text){
+  if(NET.gameOver) return;
+  clearTimer();
+  show(`
+    <h1 style="font-size:26px">通信エラー</h1>
+    <div class="card center">
+      <p>${esc(text)}</p>
+      <p class="note">相手が退出したか、接続が切断されました。</p>
+    </div>
+    <button class="btn" id="ok">タイトルへ戻る</button>
+  `);
+  document.getElementById("ok").onclick = ()=>location.reload();
+}
+
+function setupConn(c){
+  NET.conn = c;
+  c.on("data", handleNetData);
+  c.on("close", ()=>netError("接続が切れました。"));
+  c.on("error", (e)=>netError("通信エラー: " + e));
+}
+
+function randomCode(){
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for(let k=0;k<6;k++) s += chars[Math.floor(Math.random()*chars.length)];
+  return s;
+}
+
+function createRoom(name){
+  if(typeof Peer === "undefined"){ alert("通信ライブラリを読み込めませんでした。ネット接続を確認してください。"); return; }
+  NET.mode = "host"; NET.myIdx = 0;
+  S.names[0] = name;
+  const code = randomCode();
+  show(`
+    <h1 style="font-size:26px">部屋を作成中…</h1>
+    <div class="card center"><div class="waiting-dots">接続サーバーに登録しています</div></div>
+  `);
+  NET.peer = new Peer("moneygame-" + code);
+  NET.peer.on("open", ()=>{
+    show(`
+      <h1 style="font-size:26px">部屋を作りました</h1>
+      <div class="card center">
+        <p class="note">相手に以下の<b>部屋コード</b>を伝えてください</p>
+        <div class="big" style="font-size:44px;letter-spacing:.3em">${code}</div>
+        <hr class="sep">
+        <div class="waiting-dots">相手の参加を待っています</div>
+      </div>
+      <button class="btn sub" id="cancel">やめる</button>
+    `);
+    document.getElementById("cancel").onclick = ()=>location.reload();
+  });
+  NET.peer.on("connection", (c)=>{
+    if(NET.conn){ try{ c.close(); }catch(e){} return; } // 3人目以降は拒否
+    setupConn(c);
+  });
+  NET.peer.on("error", (e)=>{
+    if(e.type === "unavailable-id"){ createRoom(name); return; } // コード衝突→再生成
+    netError("接続サーバーに繋がりませんでした(" + e.type + ")");
+  });
+}
+
+function joinRoom(name, code){
+  if(typeof Peer === "undefined"){ alert("通信ライブラリを読み込めませんでした。ネット接続を確認してください。"); return; }
+  if(!/^[A-Za-z0-9]{6}$/.test(code)){ alert("部屋コードは6文字の英数字です。"); return; }
+  NET.mode = "guest"; NET.myIdx = 1;
+  S.names[1] = name;
+  show(`
+    <h1 style="font-size:26px">参加中…</h1>
+    <div class="card center"><div class="waiting-dots">部屋 ${esc(code.toUpperCase())} に接続しています</div></div>
+  `);
+  NET.peer = new Peer();
+  NET.peer.on("open", ()=>{
+    const c = NET.peer.connect("moneygame-" + code.toUpperCase(), { reliable:true, serialization:"json" });
+    setupConn(c);
+    c.on("open", ()=>{ netSend({ type:"join", name }); });
+  });
+  NET.peer.on("error", (e)=>{
+    if(e.type === "peer-unavailable"){ netError("その部屋コードは見つかりませんでした。"); return; }
+    netError("接続サーバーに繋がりませんでした(" + e.type + ")");
+  });
+}
+
+function startMatch(){
+  S.p = [newPlayer(), newPlayer()];
+  S.game = 1;
+  NET.inbox = {};
+  NET.gameOver = false;
+  gameIntro();
+}
+
+function waitScreen(message){
+  return `
+    ${isOnline() ? statusBar(myIdx()) : ""}
+    <h2 class="center">⏳ 待機中</h2>
+    <div class="card center">
+      <div class="waiting-dots">${esc(message)}</div>
+      <p class="note">相手の制限時間が切れると自動的に進みます。</p>
+    </div>`;
+}
+function waitFor(check, message){
+  const tryProceed = ()=>{ if(check()) NET.waiter = null; };
+  NET.waiter = tryProceed;
+  show(waitScreen(message));
+  tryProceed();
 }
 
 /* ================= ユーティリティ ================= */
@@ -116,6 +260,28 @@ function roundGain(i){
   return g;
 }
 
+/* ================= 相手のコミットを自分の状態へ反映 ================= */
+function applyOppStash(msg){
+  const j = oppIdx(), r = S.round, p = S.p[j];
+  if(msg.loan === "cash"){ p.cash += 20; useSkill(j,"yuushi"); r.notes.push(`${esc(S.names[j])}【追加融資】現金+20万円`); }
+  else if(msg.loan === "budget"){ p.budget += 20; useSkill(j,"yuushi"); r.notes.push(`${esc(S.names[j])}【追加融資】予想枠+20万円`); }
+  if(msg.baiPush){ r.baiPush[j] = true; useSkill(j,"baiPush"); }
+  r.x[j] = msg.x.map(v=>clampInt(v,0,999));
+  r.d[j] = msg.d.map(v=>clampInt(v,0,999));
+  p.cash -= r.x[j].reduce((a,b)=>a+b,0);
+}
+function applyOppGuess(msg){
+  const j = oppIdx(), r = S.round, p = S.p[j];
+  if(msg.sasatsu){ r.sasatsu[j] = true; useSkill(j,"sasatsu"); r.notes.push(`${esc(S.names[j])}【査察官】を使用(質問内容は非公開)`); }
+  if(msg.sashiosae){ r.sashiosae[j] = true; useSkill(j,"sashiosae"); }
+  r.y[j] = msg.y.map(v=>clampInt(v,0,999));
+  p.budget -= r.y[j].reduce((a,b)=>a+b,0);
+}
+function applyPostAction(i, action){
+  if(action === "torimodoshi"){ S.round.torimodoshi[i] = true; useSkill(i,"torimodoshi"); }
+  else if(action === "hoken"){ S.round.hoken[i] = true; useSkill(i,"hoken"); }
+}
+
 /* ================= 画面: タイトル ================= */
 function titleScreen(){
   show(`
@@ -130,24 +296,43 @@ function titleScreen(){
       ・<b style="color:var(--red)">敗者には……お迎えが来る。</b>
     </div>
     <div class="card">
-      <h2 style="margin-top:0">スキル(1試合に1回)</h2>
-      <p class="note">事前選択はなし。使いたいタイミングが来たら、その場で下記から1つ選んで使用できる。</p>
-      ${skillListHtml()}
-    </div>
-    <div class="card">
+      <h2 style="margin-top:0">🏠 1台で対戦(ホットシート)</h2>
       <label>プレイヤー1の名前</label>
       <input type="text" id="n1" maxlength="10" placeholder="プレイヤー1">
       <label>プレイヤー2の名前</label>
       <input type="text" id="n2" maxlength="10" placeholder="プレイヤー2">
+      <button class="btn" id="goLocal">この端末で開始</button>
     </div>
-    <button class="btn" id="go">ゲーム開始</button>
+    <div class="card">
+      <h2 style="margin-top:0">🌐 オンライン対戦(2端末)</h2>
+      <label>あなたの名前</label>
+      <input type="text" id="nn" maxlength="10" placeholder="名前">
+      <button class="btn" id="goHost">部屋を作る(コードを発行)</button>
+      <hr class="sep">
+      <label>相手から聞いた部屋コード</label>
+      <input type="text" id="code" maxlength="6" placeholder="例: A2C4EF" style="text-transform:uppercase">
+      <button class="btn sub" id="goJoin">部屋に入る</button>
+    </div>
+    <div class="card">
+      <h2 style="margin-top:0">スキル(1試合に1回)</h2>
+      <p class="note">事前選択はなし。使いたいタイミングが来たら、その場で下記から1つ選んで使用できる。</p>
+      ${skillListHtml()}
+    </div>
   `);
-  document.getElementById("go").onclick = ()=>{
+  document.getElementById("goLocal").onclick = ()=>{
+    NET.mode = "local";
     S.names[0] = document.getElementById("n1").value.trim() || "プレイヤー1";
     S.names[1] = document.getElementById("n2").value.trim() || "プレイヤー2";
-    S.p = [newPlayer(), newPlayer()];
-    S.game = 1;
-    gameIntro();
+    startMatch();
+  };
+  document.getElementById("goHost").onclick = ()=>{
+    const name = document.getElementById("nn").value.trim() || "プレイヤー1";
+    createRoom(name);
+  };
+  document.getElementById("goJoin").onclick = ()=>{
+    const name = document.getElementById("nn").value.trim() || "プレイヤー2";
+    const code = document.getElementById("code").value.trim();
+    joinRoom(name, code);
   };
 }
 
@@ -193,7 +378,8 @@ function gameIntro(){
   `);
   document.getElementById("ok").onclick = ()=>{
     S.round = newRound(special ? 2 : 1);
-    handover(0, "仕込み(秘密・3分)", ()=>stashScreen(0));
+    if(isOnline()) stashScreen(myIdx());
+    else handover(0, "仕込み(秘密・3分)", ()=>stashScreen(0));
   };
 }
 
@@ -260,6 +446,7 @@ function stashScreen(i, remainSec){
     const useLoan = (kind)=>{
       const rem = timerRemain; // 残り時間を引き継ぐ
       useSkill(i, "yuushi");
+      r.loan[i] = kind;
       if(kind==="cash"){ p.cash += 20; r.notes.push(`${esc(S.names[i])}【追加融資】現金+20万円`); }
       else { p.budget += 20; r.notes.push(`${esc(S.names[i])}【追加融資】予想枠+20万円`); }
       stashScreen(i, rem); // 再描画(残金反映)
@@ -287,7 +474,18 @@ function stashScreen(i, remainSec){
     }
     r.x[i] = xs; r.d[i] = ds;
     p.cash -= xs.reduce((a,b)=>a+b,0);
-    if(i===0) handover(1, "仕込み(秘密・3分)", ()=>stashScreen(1));
+    if(isOnline()){
+      netSend({ type:"stash", game:S.game, x:xs, d:ds, baiPush:r.baiPush[i], loan:r.loan[i] });
+      waitFor(()=>{
+        const m = inboxFor(S.game).stash;
+        if(!m) return false;
+        inboxFor(S.game).stash = null;
+        applyOppStash(m);
+        declReveal();
+        return true;
+      }, "相手の仕込みを待っています…");
+    }
+    else if(i===0) handover(1, "仕込み(秘密・3分)", ()=>stashScreen(1));
     else declReveal();
   };
   const startTimerAgain = (sec)=>startTimer(sec ?? STASH_SEC, "tm", ()=>{
@@ -315,7 +513,10 @@ function declReveal(){
     ${line(0)}${line(1)}
     <button class="btn" id="ok">予想フェイズへ</button>
   `);
-  document.getElementById("ok").onclick = ()=>handover(0, "予想(秘密・5分)", ()=>guessScreen(0));
+  document.getElementById("ok").onclick = ()=>{
+    if(isOnline()) guessScreen(myIdx());
+    else handover(0, "予想(秘密・5分)", ()=>guessScreen(0));
+  };
 }
 
 /* ---- 予想 ---- */
@@ -383,6 +584,7 @@ function guessScreen(i){
       const n = clampInt(document.getElementById("qn").value,1,200);
       const truth = (r.x[j][boxIdx] ?? 0) >= n;
       useSkill(i, "sasatsu");
+      r.sasatsu[i] = true;
       r.notes.push(`${esc(S.names[i])}【査察官】を使用(質問内容は非公開)`);
       document.getElementById("ans").textContent =
         (boxes===2 ? `箱${"AB"[boxIdx]}: ` : "") + (truth ? `YES ― ${n}万円以上ある` : `NO ― ${n}万円未満だ`);
@@ -411,7 +613,18 @@ function guessScreen(i){
     }
     r.y[i] = ys;
     p.budget -= ys.reduce((a,b)=>a+b,0);
-    if(i===0) handover(1, "予想(秘密・5分)", ()=>guessScreen(1));
+    if(isOnline()){
+      netSend({ type:"guess", game:S.game, y:ys, sashiosae:r.sashiosae[i], sasatsu:r.sasatsu[i] });
+      waitFor(()=>{
+        const m = inboxFor(S.game).guess;
+        if(!m) return false;
+        inboxFor(S.game).guess = null;
+        applyOppGuess(m);
+        openScreen();
+        return true;
+      }, "相手の予想を待っています…");
+    }
+    else if(i===0) handover(1, "予想(秘密・5分)", ()=>guessScreen(1));
     else openScreen();
   };
   const restart = (sec)=>startTimer(sec ?? GUESS_SEC, "tm", ()=>{
@@ -434,10 +647,29 @@ function openScreen(){
 }
 
 // オープン後スキル判断(スキル未使用のプレイヤーだけ順番に確認。使用宣言は公開情報)
-function postSkillFlow(i){
-  if(i > 1){ resultScreen(); return; }
-  if(S.p[i].skillUsed){ postSkillFlow(i+1); return; }
-  postSkillScreen(i, ()=>postSkillFlow(i+1));
+function postSkillFlow(k){
+  if(k > 1){ resultScreen(); return; }
+  if(S.p[k].skillUsed){ postSkillFlow(k+1); return; }
+  if(!isOnline()){
+    postSkillScreen(k, (action)=>{ applyPostAction(k, action); postSkillFlow(k+1); });
+    return;
+  }
+  if(k === myIdx()){
+    postSkillScreen(k, (action)=>{
+      applyPostAction(k, action);
+      netSend({ type:"post", game:S.game, action });
+      postSkillFlow(k+1);
+    });
+  } else {
+    waitFor(()=>{
+      const m = inboxFor(S.game).post;
+      if(!m) return false;
+      inboxFor(S.game).post = null;
+      applyPostAction(oppIdx(), m.action);
+      postSkillFlow(k+1);
+      return true;
+    }, "相手のスキル判断を待っています…");
+  }
 }
 
 function revealTable(){
@@ -470,7 +702,7 @@ function revealTable(){
 
 /* ---- オープン後スキル(公開判断) ---- */
 function postSkillScreen(i, next){
-  const p = S.p[i], r = S.round, j = 1-i;
+  const r = S.round, j = 1-i;
   const myGain = roundGain(i), oppGain = roundGain(j);
   const refund = r.x[i].reduce((a,b)=>a+b,0);
   const canTorimodoshi = refund > 0;
@@ -495,10 +727,10 @@ function postSkillScreen(i, next){
     <button class="btn" id="ok">使わずに進む</button>
   `);
   const ut = document.getElementById("useTori");
-  if(ut) ut.onclick = ()=>{ r.torimodoshi[i] = true; useSkill(i, "torimodoshi"); next(); };
+  if(ut) ut.onclick = ()=>next("torimodoshi");
   const uh = document.getElementById("useHoken");
-  if(uh) uh.onclick = ()=>{ r.hoken[i] = true; useSkill(i, "hoken"); next(); };
-  document.getElementById("ok").onclick = next;
+  if(uh) uh.onclick = ()=>next("hoken");
+  document.getElementById("ok").onclick = ()=>next("none");
 }
 
 /* ---- ラウンド結果 ---- */
@@ -541,6 +773,7 @@ function resultScreen(){
 
 /* ================= 最終結果と回収演出 ================= */
 function finalScreen(){
+  NET.gameOver = true;
   let winner, loser, tieNote = "";
   if(S.p[0].pts !== S.p[1].pts){
     winner = S.p[0].pts > S.p[1].pts ? 0 : 1;
@@ -569,6 +802,7 @@ function finalScreen(){
 }
 
 function drawScreen(){
+  NET.gameOver = true;
   show(`
     <h1 style="font-size:26px">引き分け</h1>
     <div class="card center">
@@ -637,6 +871,7 @@ function epilogue(winner, loser){
         <tr><td>使用スキル</td><td>${skillCell(0)}</td><td>${skillCell(1)}</td></tr>
       </table>
     </div>
+    ${isOnline() ? `<p class="note center">オンライン対戦をもう一度遊ぶには、部屋を作り直してください。</p>` : ""}
     <button class="btn" id="ok">もう一度遊ぶ</button>
   `);
   document.getElementById("ok").onclick = ()=>location.reload();
